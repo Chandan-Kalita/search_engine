@@ -32,9 +32,37 @@ async def test_database():
 
 @app.get("/documents")
 async def get_documents(q:str):
+    normalized_query = normalize_query(q);
+    print("normalized_query: ",normalized_query)
     """Example endpoint to fetch documents from database."""
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(f"SELECT * FROM documents WHERE title ilike '%{q}%' or content ilike '%{q}%' LIMIT 10")
+            await cur.execute(f"SELECT id, title, content FROM documents WHERE textsearchable_index_col @@ websearch_to_tsquery('english', '{normalized_query}') LIMIT 10")
             documents = await cur.fetchall()
             return {"documents": documents}
+        
+def normalize_query(q:str)-> str:
+    unwanted_chars = [
+        '-',
+        '_',
+        '.',
+        '/',
+        '\\',
+        ',',
+        ':',
+        ';',
+        '(',
+        ')',
+        '[',
+        ']',
+        '{'
+        '}',]
+    new_q = q
+    for chr in unwanted_chars:
+        q_list = new_q.split(chr)
+        new_q = " ".join(q_list)
+    new_q_list = []
+    for word in new_q.split(' '):
+        if word:
+            new_q_list.append(word.strip())
+    return ' '.join(new_q_list).lower()

@@ -4,7 +4,7 @@ Run with: python seed.py
 """
 import asyncio
 from database import init_db_pool, close_db_pool, get_db_connection
-
+import csv
 
 async def create_tables():
     """Create database tables."""
@@ -12,6 +12,7 @@ async def create_tables():
         async with conn.cursor() as cur:
             # Create users table
             await cur.execute("""
+                DROP TABLE if EXISTS documents;
                 CREATE TABLE IF NOT EXISTS documents (
                     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
                     title text,
@@ -22,20 +23,29 @@ async def create_tables():
             await conn.commit()
             print("✓ Documents table created")
 
+def get_documents():
+    results = []
+    with open("./misc/Tech_Posts_1k.csv", "r") as csvfile:
+        content = csv.reader(csvfile)
+        i=0
+        for row in content:
+            if i == 0:
+                i=i+1
+                continue
+            results.append((row[0], row[1]))
+
+        csvfile.close()
+
+    return results
+
 
 async def seed_data():
     """Insert sample data into the database."""
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
             # Insert sample documents
-            documents = [
-                ('Introduction to PostgreSQL', 'PostgreSQL is a powerful open-source relational database system.'),
-                ('FastAPI Best Practices', 'FastAPI is a modern, fast web framework for building APIs with Python.'),
-                ('Python Async Programming', 'Async programming in Python allows for concurrent execution of tasks.'),
-                ('Database Seeding', 'Database seeding is the process of populating a database with initial data.'),
-                ('Neon Cloud Database', 'Neon is a serverless PostgreSQL database service.')
-            ]
-
+            documents = get_documents()
+            print("Inserting" , len(documents), " like: ", documents[0])
             for title, content in documents:
                 try:
                     await cur.execute(
