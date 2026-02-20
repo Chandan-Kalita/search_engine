@@ -2,3 +2,5 @@ fastapi[standard]
 psycopg[binary]
 psycopg-pool
 python-dotenv
+httpx
+beautifulsoup4

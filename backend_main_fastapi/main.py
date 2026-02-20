@@ -37,7 +37,7 @@ async def get_documents(q:str):
     """Example endpoint to fetch documents from database."""
     async with get_db_connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(f"SELECT id, title, content FROM documents WHERE textsearchable_index_col @@ websearch_to_tsquery('english', '{normalized_query}') LIMIT 10")
+            await cur.execute(f"SELECT id, title, url, ts_headline('english', content, websearch_to_tsquery('english', '{normalized_query}')) FROM documents WHERE textsearchable_index_col @@ websearch_to_tsquery('english', '{normalized_query}') LIMIT 10")
             documents = await cur.fetchall()
             return {"documents": documents}
         
