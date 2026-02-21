@@ -30,10 +30,12 @@ async def get_one_url_from_queue(conn, logger:MyLogger):
             row = await cur.fetchone()
             await conn.commit()
             if row:
-                logger.debug("Crawling :", row["url"])
-                return row["url"]
+                url = row["url"]
+                logger.debug("Crawling :", url)
+                return url
             return None
         except Exception as e :
+            await conn.rollback()
             logger.error("Error while  fetching target url", e)
 
 async def add_links_to_queue(conn, links, logger):
@@ -81,15 +83,41 @@ async def mark_crawled(conn, url, logger):
             await conn.rollback()
             logger.error(f"Failed to mark {url} as crawled: {e}")
 
-
-async def get_response_from_url(url, logger):
-    async with httpx.AsyncClient(timeout=10) as client:
+async def mark_failed_with_retry(conn, url, fail_reason,logger):
+    async with conn.cursor() as cur:
         try:
-            res = await client.get(url, follow_redirects=True)
-            if res.status_code < 400:
-                return res.text
-        except (httpx.RequestError, httpx.TimeoutException):
-            return None
+            await cur.execute(
+                "UPDATE url_queue SET status= CASE " \
+                    "WHEN retry_count <3 THEN 'PENDING' " \
+                    "WHEN retry_count >= 3 THEN 'FAILED' " \
+                    "END, " \
+                    "retry_count=retry_count+1, " \
+                    "fail_reason=%s " \
+                "WHERE url=%s",
+                (fail_reason, url)
+            )
+            await conn.commit()
+            logger.debug(f"Marked as failed: {url}")
+        except Exception as e:
+            await conn.rollback()
+            logger.error(f"Failed to mark {url} as failed: {e}")
+
+async def get_response_from_url(url, logger, client):
+    try:
+        res = await client.get(url, follow_redirects=True)
+        
+        res.raise_for_status()  
+        return {"data":res.text, "success":True}
+    except httpx.HTTPStatusError as e:
+        return {"data":f"HTTP error {e.response.status_code}: {e.response.text}", "success":False}
+    except httpx.TimeoutException:
+        return {"data":f"Error: Request timed out", "success":False}
+    except httpx.ConnectError:
+        return {"data":f"Error: Connection failed", "success":False}
+    except httpx.RequestError as e:
+        return {"data":f"Request error: {str(e)}", "success":False}
+    except Exception as e:
+        return {"data":f"Unexpected error: {str(e)}", "success":False}
 
 
 def extract_page_info(content: str):
@@ -137,33 +165,34 @@ def filter_links(links, main_url_str):
 async def worker(semaphore:asyncio.Semaphore, worker_no):
 
     logger = MyLogger(f"[Worker-{worker_no}] ")
-    while True:
-        async with semaphore:
-            # Single connection reused for all DB operations in this worker
-            async with get_db_connection() as conn:
-                url = await get_one_url_from_queue(conn, logger)
-        if url is None:
-            await asyncio.sleep(100)
-            continue
-
-        html_content = await get_response_from_url(url, logger)
-        if html_content is None:
-            async with get_db_connection() as conn:
-
-                await mark_crawled(conn, url, logger)
+    async with httpx.AsyncClient(timeout=10) as httpxClient:
+        while True:
+            print('.')
+            async with semaphore:
+                # Single connection reused for all DB operations in this worker
+                async with get_db_connection() as conn:
+                    url = await get_one_url_from_queue(conn, logger)
+            if url is None:
+                await asyncio.sleep(100)
                 continue
 
-        loop = asyncio.get_running_loop()
-        links, text, title = await loop.run_in_executor(
-            None, extract_page_info, html_content
-        )
-        filtered_links = await loop.run_in_executor(
-            None, filter_links, links, url
-        )
-        async with get_db_connection() as conn:
-            await add_links_to_queue(conn, filtered_links, logger)
-            await insert_document(conn, title, text, url, logger)
-            await mark_crawled(conn, url, logger)
+            response = await get_response_from_url(url, logger, httpxClient)
+            if response["success"] is False:
+                async with get_db_connection() as conn:
+                    await mark_failed_with_retry(conn, url, response["data"], logger)
+                    continue
+
+            loop = asyncio.get_running_loop()
+            links, text, title = await loop.run_in_executor(
+                None, extract_page_info, response["data"]
+            )
+            filtered_links = await loop.run_in_executor(
+                None, filter_links, links, url
+            )
+            async with get_db_connection() as conn:
+                await add_links_to_queue(conn, filtered_links, logger)
+                await insert_document(conn, title, text, url, logger)
+                await mark_crawled(conn, url, logger)
 
 
 

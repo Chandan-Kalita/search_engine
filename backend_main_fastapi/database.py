@@ -30,7 +30,8 @@ async def init_db_pool():
         open=False,  # Explicit deferred initialization (best practice)
         min_size=2,
         max_size=10,
-        kwargs={"row_factory": dict_row}
+        kwargs={"row_factory": dict_row},
+        reconnect_timeout=5,
     )
     await pool.open()
     print("Database pool initialized")
